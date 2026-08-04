@@ -1,0 +1,30 @@
+# Environment variables — NEVER commit secrets
+.env
+.env.local
+.env.*.local
+
+# Android build
+/build/
+/.gradle/
+.gradle/
+*.apk
+*.aar
+*.jks
+*.keystore
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+.m2/
+
+# Logs
+*.log
