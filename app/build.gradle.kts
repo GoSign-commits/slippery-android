@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.production.slippery"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.production.slippery"
@@ -49,8 +49,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     // Supabase
-    implementation(platform("io.github.jan-tennert.supabase:bom:2.6.0"))
-    implementation("io.github.jan-tennert.supabase:gotrue-kt")
+    implementation(platform("io.github.jan-tennert.supabase:bom:3.5.0"))
+    implementation("io.github.jan-tennert.supabase:auth-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.github.jan-tennert.supabase:storage-kt")
     implementation("io.ktor:ktor-client-android:2.3.12")
