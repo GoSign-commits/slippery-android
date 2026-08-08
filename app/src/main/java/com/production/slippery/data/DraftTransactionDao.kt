@@ -25,4 +25,11 @@ interface DraftTransactionDao {
 
     @Query("UPDATE draft_transactions SET submitted = 1 WHERE id = :id")
     suspend fun markSubmitted(id: Long)
+
+    // Local half of the slip-number seed logic — the server half only
+    // knows about SUBMITTED slips. This covers the gap: local drafts
+    // already saved on this device that the server has never seen
+    // (offline, or server unreachable at seed time).
+    @Query("SELECT MAX(slipNumber) FROM draft_transactions")
+    suspend fun getMaxSlipNumber(): Int?
 }
