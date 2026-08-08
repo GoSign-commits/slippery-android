@@ -19,6 +19,25 @@ import java.util.UUID
  * [submitted] is a local-only UI flag. Once true, this draft mirrors an
  * immutable server-side transaction — edit/delete must be disabled in
  * the UI from that point on, per SCHEMA.md's immutability rule.
+ *
+ * [supplier] required, matches the physical cover sheet.
+ *
+ * [vatApplicable] nullable Boolean, not a plain Boolean — `null` means
+ * "buyer hasn't answered yet", distinct from `false`. No default is
+ * allowed to masquerade as an unanswered question. Save is blocked until
+ * this is explicitly set.
+ *
+ * [vatAmount]/[amountExclVat] are calculated, never typed by the buyer:
+ * amount is always VAT-inclusive (what the slip shows). When VATable,
+ * vatAmount = amount * 15/115, amountExclVat = amount - vatAmount. Both
+ * stay null when not VATable — never 0 — so "not asked" stays
+ * distinguishable from "VAT was zero" (see TRANSACTIONS.md).
+ *
+ * [slipNumber] generated client-side at capture time, per buyer,
+ * sequential — seeded from the buyer's MAX(slip_number) on Supabase at
+ * session start so a reinstall/new device doesn't collide with prior
+ * submissions (see TRANSACTIONS.md "Slip numbering"). 0 is a placeholder
+ * only — the ViewModel always assigns a real value before insert.
  */
 @Entity(tableName = "draft_transactions")
 data class DraftTransaction(
@@ -31,5 +50,10 @@ data class DraftTransaction(
     val description: String = "",
     val spentAt: Long = System.currentTimeMillis(),
     val submitted: Boolean = false,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val supplier: String = "",
+    val vatApplicable: Boolean? = null,
+    val vatAmount: Double? = null,
+    val amountExclVat: Double? = null,
+    val slipNumber: Int = 0
 )

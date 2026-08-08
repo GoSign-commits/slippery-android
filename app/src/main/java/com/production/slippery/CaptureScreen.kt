@@ -8,18 +8,21 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -54,6 +57,10 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
     var categoryMenuExpanded by remember { mutableStateOf(false) }
     var noteInput by remember { mutableStateOf("") }
+    var supplierInput by remember { mutableStateOf("") }
+    // null = buyer hasn't answered yet — no default is allowed to
+    // masquerade as "No", per TRANSACTIONS.md's VAT design.
+    var vatApplicable by remember { mutableStateOf<Boolean?>(null) }
 
     val scannerOptions = remember {
         GmsDocumentScannerOptions.Builder()
@@ -76,6 +83,16 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                 context.contentResolver.openInputStream(pageUri)?.use { input ->
                     destFile.outputStream().use { output -> input.copyTo(output) }
                 }
+                // Defensive reset — belt + braces alongside the
+                // onDismissRequest fix below, so a fresh scan never
+                // inherits a previous (possibly dismissed-without-cancel)
+                // entry's leftover field values.
+                editingDraft = null
+                amountInput = ""
+                selectedCategory = null
+                noteInput = ""
+                supplierInput = ""
+                vatApplicable = null
                 pendingSourceFile = destFile
                 showAmountDialog = true
             }
@@ -111,6 +128,8 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         amountInput = draft.amount.toString()
                         selectedCategory = categories.find { it.id == draft.categoryId }
                         noteInput = draft.description
+                        supplierInput = draft.supplier
+                        vatApplicable = draft.vatApplicable
                         pendingSourceFile = null
                         showAmountDialog = true
                     },
@@ -141,22 +160,67 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
         )
     }
 
+    fun resetDialogState() {
+        amountInput = ""
+        selectedCategory = null
+        noteInput = ""
+        supplierInput = ""
+        vatApplicable = null
+        pendingSourceFile = null
+        editingDraft = null
+        showAmountDialog = false
+    }
+
     if (showAmountDialog) {
         val isEditing = editingDraft != null
-        // Photo is mandatory — no "no slip" path. New entries must have a
-        // scanned slip; edits keep whatever photo the draft already has.
         val hasPhoto = if (isEditing) editingDraft?.photoPath != null else pendingSourceFile != null
-        val canSave = amountInput.toDoubleOrNull() != null && selectedCategory != null && hasPhoto
+        val amountValue = amountInput.toDoubleOrNull()
+        val canSave = amountValue != null && selectedCategory != null && hasPhoto &&
+            supplierInput.isNotBlank() && vatApplicable != null && noteInput.isNotBlank()
 
-        AlertDialog(
-            onDismissRequest = { showAmountDialog = false },
-            title = { Text(if (isEditing) "Edit slip" else "Slip details") },
-            text = {
-                Column {
+        // Calculated live from amountInput — never typed by the buyer.
+        // amount is always VAT-inclusive (what the slip shows).
+        val vatAmount = if (vatApplicable == true && amountValue != null) amountValue * 15 / 115 else null
+        val amountExclVat = if (vatApplicable == true && amountValue != null) amountValue - (vatAmount ?: 0.0) else null
+
+        // Custom Dialog, not AlertDialog — AlertDialog's confirm/cancel
+        // buttons live in a fixed footer slot that doesn't scroll with the
+        // content and doesn't reliably respect imePadding, which is exactly
+        // why Save kept getting hidden behind the keyboard. Putting the
+        // buttons inside the same scrollable Column as everything else
+        // guarantees they're reachable by scrolling, regardless of
+        // keyboard height.
+        Dialog(
+            onDismissRequest = {
+                if (editingDraft == null) pendingSourceFile?.delete()
+                resetDialogState()
+            },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .heightIn(max = 560.dp),
+                shape = MaterialTheme.shapes.large,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .imePadding()
+                        .padding(24.dp)
+                ) {
+                    Text(
+                        if (isEditing) "Edit slip" else "Slip details",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Spacer(Modifier.height(16.dp))
+
                     OutlinedTextField(
-                        value = amountInput,
-                        onValueChange = { amountInput = it },
-                        label = { Text("Amount (R)") }
+                        value = noteInput,
+                        onValueChange = { noteInput = it },
+                        label = { Text("Description *") },
+                        modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
 
@@ -171,10 +235,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Category *") },
-                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true),
-                            supportingText = {
-                                if (selectedCategory == null) Text("Required")
-                            }
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
                         )
                         ExposedDropdownMenu(
                             expanded = categoryMenuExpanded,
@@ -191,51 +252,94 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                             }
                         }
                     }
-
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = noteInput,
-                        onValueChange = { noteInput = it },
-                        label = { Text("Description (optional)") }
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = canSave,
-                    onClick = {
-                        val amt = amountInput.toDoubleOrNull()
-                        if (amt != null && selectedCategory != null) {
-                            val existing = editingDraft
-                            if (existing != null) {
-                                vm.updateDraft(existing, amt, selectedCategory, noteInput.trim())
-                            } else {
-                                val path = pendingSourceFile?.absolutePath
-                                vm.addDraft(path, amt, selectedCategory, noteInput.trim())
-                            }
-                        }
-                        amountInput = ""
-                        selectedCategory = null
-                        noteInput = ""
-                        pendingSourceFile = null
-                        editingDraft = null
-                        showAmountDialog = false
-                    }
-                ) { Text("Save") }
-            },
 
-            dismissButton = {
-                TextButton(onClick = {
-                    if (editingDraft == null) pendingSourceFile?.delete()
-                    pendingSourceFile = null
-                    editingDraft = null
-                    amountInput = ""
-                    selectedCategory = null
-                    noteInput = ""
-                    showAmountDialog = false
-                }) { Text("Cancel") }
+                    OutlinedTextField(
+                        value = supplierInput,
+                        onValueChange = { supplierInput = it },
+                        label = { Text("Supplier *") }
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    Text("VATable? *", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = vatApplicable == true,
+                            onClick = { vatApplicable = true },
+                            label = { Text("Yes") }
+                        )
+                        FilterChip(
+                            selected = vatApplicable == false,
+                            onClick = { vatApplicable = false },
+                            label = { Text("No") }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    // Calculated, read-only — kept visible as an in-the-moment
+                    // sanity check (catch a Total typo before saving), but
+                    // lightweight so it doesn't read as "more required inputs".
+                    // Shown under Total, matching the physical cover sheet's
+                    // reading order (Total is the input, VAT/Less VAT follow).
+                    OutlinedTextField(
+                        value = amountInput,
+                        onValueChange = { amountInput = it },
+                        label = { Text("Total (R) *") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (vatApplicable == true) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "VAT: ${vatAmount?.let { "R%.2f".format(it) } ?: "—"}   " +
+                                "Less VAT: ${amountExclVat?.let { "R%.2f".format(it) } ?: "—"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = {
+                            if (editingDraft == null) pendingSourceFile?.delete()
+                            resetDialogState()
+                        }) { Text("Cancel") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            enabled = canSave,
+                            onClick = {
+                                val amt = amountValue
+                                val vat = vatApplicable
+                                if (amt != null && selectedCategory != null && vat != null) {
+                                    val existing = editingDraft
+                                    if (existing != null) {
+                                        vm.updateDraft(
+                                            existing, amt, selectedCategory, noteInput.trim(),
+                                            supplierInput.trim(), vat
+                                        )
+                                    } else {
+                                        val path = pendingSourceFile?.absolutePath
+                                        vm.addDraft(
+                                            path, amt, selectedCategory, noteInput.trim(),
+                                            supplierInput.trim(), vat
+                                        )
+                                    }
+                                }
+                                resetDialogState()
+                            }
+                        ) { Text("Save") }
+                    }
+                    // Generous bottom padding — was the other half of the
+                    // "have to minimise the keyboard" complaint: even with
+                    // the button now inside the scroll, it sat flush against
+                    // the bottom edge with the keyboard up. This guarantees
+                    // clear space below it once scrolled fully into view.
+                    Spacer(Modifier.height(32.dp))
+                }
             }
-        )
+        }
     }
 }
 
@@ -256,24 +360,26 @@ private fun DraftRow(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).alpha(rowAlpha),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (draft.photoPath != null) {
-            AsyncImage(
-                model = draft.photoPath,
-                contentDescription = "receipt",
-                modifier = Modifier.size(56.dp)
-            )
-        } else {
-            Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.Receipt, contentDescription = "no photo")
-            }
+        // Slip number only — no "Slip #" label, no thumbnail. Thumbnail's
+        // still viewable in the edit dialog, just not worth the row space.
+        Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.Center) {
+            Text("${draft.slipNumber}", style = MaterialTheme.typography.bodyMedium)
         }
 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text("R${"%.2f".format(draft.amount)}  •  ${draft.categoryName}")
-            if (draft.description.isNotBlank()) {
-                Text(draft.description, style = MaterialTheme.typography.bodySmall)
+            Text(
+                draft.description.ifBlank { draft.categoryName },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            draft.categoryId?.let {
+                Text(draft.categoryName, style = MaterialTheme.typography.bodySmall)
             }
+            Text(
+                "R${"%.2f".format(draft.amount)}",
+                style = MaterialTheme.typography.titleMedium
+            )
             if (draft.submitted) {
                 Text(
                     "Submitted",
@@ -282,9 +388,6 @@ private fun DraftRow(
                 )
             }
         }
-        // No menu at all once submitted — nothing to edit or delete on an
-        // immutable record. This is enforced in the ViewModel too (belt +
-        // braces), but hiding it here avoids offering an action that's a no-op.
         if (!draft.submitted) {
             Box {
                 IconButton(onClick = onMenuOpen) {
