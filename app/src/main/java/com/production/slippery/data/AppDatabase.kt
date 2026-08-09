@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [DraftTransaction::class],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +34,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v2 -> v3: envelopeId (2026-08-08) — envelope awareness. Any
+        // existing local drafts pre-date envelopes existing as a concept
+        // at all (this is single-user testing, no real data at stake) —
+        // backfilled to '' rather than treated as a blocker. A real
+        // envelope-less draft shouldn't be possible going forward; the
+        // ViewModel always supplies a real envelopeId on insert from here on.
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE draft_transactions ADD COLUMN envelopeId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -41,7 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "slippery.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     // No fallbackToDestructiveMigration — any future schema change
                     // MUST add a real Migration, matching Handy Andy's pattern. Room
                     // will throw rather than silently wipe unsynced drafts.

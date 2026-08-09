@@ -28,6 +28,7 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.production.slippery.data.DraftTransaction
 import com.production.slippery.ui.CaptureViewModel
+import com.production.slippery.ui.EnvelopeUiState
 import com.production.slippery.util.PhotoFiles
 import java.io.File
 
@@ -46,6 +47,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     )
     val drafts by vm.drafts.collectAsState()
     val categories by vm.categories.collectAsState()
+    val envelopeState by vm.envelopeState.collectAsState()
 
     var receiptMenuFor by remember { mutableStateOf<Long?>(null) }
     var editingDraft by remember { mutableStateOf<DraftTransaction?>(null) }
@@ -103,41 +105,85 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
         Text("Slippery", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
-        Button(onClick = {
-            scannerClient.getStartScanIntent(activity)
-                .addOnSuccessListener { intentSender ->
-                    scanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+        // Three real outcomes here, not just loading/loaded — see
+        // TRANSACTIONS.md "Envelope lifecycle" and "Zero-local-records case".
+        // Capture is only ever shown in the Ready branch.
+        when (val state = envelopeState) {
+            is EnvelopeUiState.Loading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-        }) {
-            Text("Scan slip")
-        }
-
-        Spacer(Modifier.height(16.dp))
-        Text("Total captured: R${"%.2f".format(drafts.sumOf { it.amount })}")
-
-        LazyColumn(Modifier.weight(1f)) {
-            items(drafts, key = { it.id }) { draft ->
-                DraftRow(
-                    draft = draft,
-                    menuOpen = receiptMenuFor == draft.id,
-                    onMenuOpen = { receiptMenuFor = draft.id },
-                    onMenuDismiss = { receiptMenuFor = null },
-                    onEdit = {
-                        receiptMenuFor = null
-                        editingDraft = draft
-                        amountInput = draft.amount.toString()
-                        selectedCategory = categories.find { it.id == draft.categoryId }
-                        noteInput = draft.description
-                        supplierInput = draft.supplier
-                        vatApplicable = draft.vatApplicable
-                        pendingSourceFile = null
-                        showAmountDialog = true
-                    },
-                    onDelete = {
-                        receiptMenuFor = null
-                        draftPendingDelete = draft
+            }
+            is EnvelopeUiState.NoOpenEnvelope -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "No active float assigned — check with accounts.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+            is EnvelopeUiState.Verifying -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        Text("Checking slip numbering...")
                     }
-                )
+                }
+            }
+            is EnvelopeUiState.Error -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            state.message,
+                            style = MaterialTheme.typography.bodyLarge,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { vm.checkEnvelope() }) { Text("Retry") }
+                    }
+                }
+            }
+            is EnvelopeUiState.Ready -> {
+                Button(onClick = {
+                    scannerClient.getStartScanIntent(activity)
+                        .addOnSuccessListener { intentSender ->
+                            scanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+                        }
+                }) {
+                    Text("Scan slip")
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Text("Float: R${"%.2f".format(state.envelope.floatAmount)}")
+                Text("Total captured: R${"%.2f".format(drafts.sumOf { it.amount })}")
+
+                LazyColumn(Modifier.weight(1f)) {
+                    items(drafts, key = { it.id }) { draft ->
+                        DraftRow(
+                            draft = draft,
+                            menuOpen = receiptMenuFor == draft.id,
+                            onMenuOpen = { receiptMenuFor = draft.id },
+                            onMenuDismiss = { receiptMenuFor = null },
+                            onEdit = {
+                                receiptMenuFor = null
+                                editingDraft = draft
+                                amountInput = draft.amount.toString()
+                                selectedCategory = categories.find { it.id == draft.categoryId }
+                                noteInput = draft.description
+                                supplierInput = draft.supplier
+                                vatApplicable = draft.vatApplicable
+                                pendingSourceFile = null
+                                showAmountDialog = true
+                            },
+                            onDelete = {
+                                receiptMenuFor = null
+                                draftPendingDelete = draft
+                            }
+                        )
+                    }
+                }
             }
         }
     }
