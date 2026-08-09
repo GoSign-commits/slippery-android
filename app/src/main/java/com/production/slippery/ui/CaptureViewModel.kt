@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
@@ -23,21 +25,55 @@ import java.io.File
 @Serializable
 private data class SlipNumberRow(@SerialName("slip_number") val slipNumber: Int)
 
+@Serializable
+private data class EnvelopeRow(val id: String, @SerialName("float_amount") val floatAmount: Double)
+
+data class EnvelopeInfo(val id: String, val floatAmount: Double)
+
+/**
+ * Three real outcomes on launch, not just loading/loaded — see
+ * TRANSACTIONS.md "Envelope lifecycle" and "Zero-local-records case".
+ */
+sealed class EnvelopeUiState {
+    object Loading : EnvelopeUiState()
+    /** No open envelope for this buyer — a real, valid state, not an error. */
+    object NoOpenEnvelope : EnvelopeUiState()
+    /** Zero local records for this envelope — must confirm with the server
+     *  before it's safe to allocate a slip number (see TRANSACTIONS.md). */
+    data class Verifying(val envelope: EnvelopeInfo) : EnvelopeUiState()
+    data class Ready(val envelope: EnvelopeInfo) : EnvelopeUiState()
+    data class Error(val message: String) : EnvelopeUiState()
+}
+
+@Serializable
+private data class CapturePingPayload(
+    @SerialName("buyer_id") val buyerId: String,
+    @SerialName("envelope_id") val envelopeId: String,
+    val amount: Double,
+    @SerialName("client_draft_id") val clientDraftId: String
+)
+
 class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = AppDatabase.getInstance(app).draftTransactionDao()
 
-    val drafts: StateFlow<List<DraftTransaction>> = dao.getAll()
+    private val _envelopeState = MutableStateFlow<EnvelopeUiState>(EnvelopeUiState.Loading)
+    val envelopeState: StateFlow<EnvelopeUiState> = _envelopeState.asStateFlow()
+
+    // Empty until the envelope is Ready — a buyer shouldn't see any draft
+    // list at all while blocked on NoOpenEnvelope/Verifying/Error.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val drafts: StateFlow<List<DraftTransaction>> = envelopeState
+        .flatMapLatest { state ->
+            if (state is EnvelopeUiState.Ready) dao.getByEnvelope(state.envelope.id)
+            else flowOf(emptyList())
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories.asStateFlow()
 
-    // Next slip number to assign locally. Seeded from the buyer's real
-    // MAX(slip_number) on Supabase at session start (see init block) so a
-    // reinstall/new device never collides with prior submissions.
-    // Starts at 1 as a safe fallback if the seed fetch fails — worse case
-    // is a local collision caught by the DB's UNIQUE(buyer_id, slip_number)
-    // constraint at submit time, never a silent duplicate.
+    // Next slip number to assign locally, scoped to whichever envelope is
+    // currently Ready. Reset/reseeded every time checkEnvelope() runs.
     private var nextSlipNumber = 1
 
     init {
@@ -52,44 +88,80 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 // can't pick a category until connectivity/next launch. Not fatal.
             }
         }
-        viewModelScope.launch {
-            // Local half first — this is the gap that mattered most: if the
-            // app is killed/reopened WHILE OFFLINE, a fresh instance used to
-            // start back at 1 even with local drafts already at 1, 2, 3 on
-            // this device, producing a real local duplicate. The server only
-            // ever knows about SUBMITTED slips, never local-only drafts, so
-            // it can't close this gap by itself. Bug found + fixed 2026-08-06.
-            val localMax = try {
-                dao.getMaxSlipNumber() ?: 0
-            } catch (e: Exception) {
-                0
-            }
-            nextSlipNumber = maxOf(nextSlipNumber, localMax + 1)
+        checkEnvelope()
+    }
 
-            // Server half — catches the reinstall/new-device case: local
-            // storage is empty/wiped, but this buyer has real submitted
-            // history the new device has never seen.
-            try {
-                val rows = SupabaseClientInstance.client.postgrest["transactions"]
-                    .select(columns = Columns.list("slip_number")) {
-                        filter { eq("buyer_id", CURRENT_BUYER_ID) }
-                        order("slip_number", Order.DESCENDING)
+    /** Public so the UI's retry button can call it directly — same logic
+     *  whether this is the first check on launch or a manual retry. */
+    fun checkEnvelope() {
+        _envelopeState.value = EnvelopeUiState.Loading
+        viewModelScope.launch {
+            val envelope = try {
+                SupabaseClientInstance.client.postgrest["envelopes"]
+                    .select(columns = Columns.list("id", "float_amount")) {
+                        filter {
+                            eq("buyer_id", CURRENT_BUYER_ID)
+                            eq("status", "open")
+                        }
                         limit(1)
                     }
-                    .decodeList<SlipNumberRow>()
-                // maxOf, not a blind assignment — this fetch is async and can
-                // resolve AFTER the buyer has already saved one or more drafts
-                // (which advance nextSlipNumber synchronously in addDraft).
-                // A blind overwrite here would clobber that progress back
-                // down to the server's answer, which is always stale until
-                // something's actually been submitted. Bug found + fixed 2026-08-06.
-                nextSlipNumber = maxOf(nextSlipNumber, (rows.firstOrNull()?.slipNumber ?: 0) + 1)
+                    .decodeList<EnvelopeRow>()
+                    .firstOrNull()
             } catch (e: Exception) {
-                // No network — nextSlipNumber already reflects the local
-                // max from above, which is the best available answer
-                // offline. The DB's UNIQUE(buyer_id, slip_number) constraint
-                // is the final backstop if this ever still collides at submit.
+                _envelopeState.value = EnvelopeUiState.Error(
+                    "Can't reach server to check your float. Check your connection and try again."
+                )
+                return@launch
             }
+
+            if (envelope == null) {
+                _envelopeState.value = EnvelopeUiState.NoOpenEnvelope
+                return@launch
+            }
+
+            val info = EnvelopeInfo(envelope.id, envelope.floatAmount)
+            seedSlipCounter(info)
+        }
+    }
+
+    // Local-first, but zero local records for THIS envelope genuinely can't
+    // be trusted alone — see TRANSACTIONS.md "Zero-local-records case".
+    private suspend fun seedSlipCounter(envelope: EnvelopeInfo) {
+        val localMax = try {
+            dao.getMaxSlipNumber(envelope.id)
+        } catch (e: Exception) {
+            null
+        }
+
+        if (localMax != null) {
+            // Any local records for this envelope — safe to proceed
+            // immediately. Worst case the number is slightly behind the
+            // server; UNIQUE(envelope_id, slip_number) catches a collision
+            // at Close.
+            nextSlipNumber = localMax + 1
+            _envelopeState.value = EnvelopeUiState.Ready(envelope)
+            return
+        }
+
+        // Zero local records — block and confirm with the server before
+        // allowing capture. Distinguishes "this envelope is brand new" from
+        // "reinstall/new device mid-envelope, server has slips this device
+        // has never seen".
+        _envelopeState.value = EnvelopeUiState.Verifying(envelope)
+        try {
+            val rows = SupabaseClientInstance.client.postgrest["transactions"]
+                .select(columns = Columns.list("slip_number")) {
+                    filter { eq("envelope_id", envelope.id) }
+                    order("slip_number", Order.DESCENDING)
+                    limit(1)
+                }
+                .decodeList<SlipNumberRow>()
+            nextSlipNumber = (rows.firstOrNull()?.slipNumber ?: 0) + 1
+            _envelopeState.value = EnvelopeUiState.Ready(envelope)
+        } catch (e: Exception) {
+            _envelopeState.value = EnvelopeUiState.Error(
+                "Can't verify slip numbering. Check your connection and try again."
+            )
         }
     }
 
@@ -101,28 +173,31 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         supplier: String,
         vatApplicable: Boolean
     ) {
+        val envelope = (envelopeState.value as? EnvelopeUiState.Ready)?.envelope ?: return
         val (vatAmount, amountExclVat) = calcVat(amount, vatApplicable)
         val slipNumber = nextSlipNumber
         nextSlipNumber++
+        val draft = DraftTransaction(
+            envelopeId = envelope.id,
+            categoryId = category?.id,
+            categoryName = category?.name ?: "",
+            photoPath = photoPath,
+            amount = amount,
+            description = description,
+            supplier = supplier,
+            vatApplicable = vatApplicable,
+            vatAmount = vatAmount,
+            amountExclVat = amountExclVat,
+            slipNumber = slipNumber
+        )
         viewModelScope.launch {
-            dao.insert(
-                DraftTransaction(
-                    categoryId = category?.id,
-                    categoryName = category?.name ?: "",
-                    photoPath = photoPath,
-                    amount = amount,
-                    description = description,
-                    supplier = supplier,
-                    vatApplicable = vatApplicable,
-                    vatAmount = vatAmount,
-                    amountExclVat = amountExclVat,
-                    slipNumber = slipNumber
-                )
-            )
+            dao.insert(draft)
+            pingCapture(envelope.id, draft)
         }
     }
 
-    /** No-op if [draft] is already submitted — immutable once synced, per SCHEMA.md. */
+    /** No-op if [draft] is already submitted — immutable once the envelope
+     *  closes, per TRANSACTIONS.md. */
     fun updateDraft(
         draft: DraftTransaction,
         amount: Double,
@@ -133,30 +208,68 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         if (draft.submitted) return
         val (vatAmount, amountExclVat) = calcVat(amount, vatApplicable)
+        val updated = draft.copy(
+            // slipNumber and envelopeId deliberately not touched — assigned
+            // once at creation, an edit doesn't move drafts between envelopes.
+            amount = amount,
+            categoryId = category?.id,
+            categoryName = category?.name ?: draft.categoryName,
+            description = description,
+            supplier = supplier,
+            vatApplicable = vatApplicable,
+            vatAmount = vatAmount,
+            amountExclVat = amountExclVat
+        )
         viewModelScope.launch {
-            dao.update(
-                // slipNumber deliberately not touched — assigned once at
-                // creation, an edit doesn't get a new slip number.
-                draft.copy(
-                    amount = amount,
-                    categoryId = category?.id,
-                    categoryName = category?.name ?: draft.categoryName,
-                    description = description,
-                    supplier = supplier,
-                    vatApplicable = vatApplicable,
-                    vatAmount = vatAmount,
-                    amountExclVat = amountExclVat
-                )
-            )
+            dao.update(updated)
+            // client_draft_id upsert key overwrites the existing ping with
+            // the edited amount — see TRANSACTIONS.md "Live burn-rate estimate".
+            pingCapture(draft.envelopeId, updated)
         }
     }
 
-    /** No-op if [draft] is already submitted — immutable once synced, per SCHEMA.md. */
+    /** No-op if [draft] is already submitted — immutable once the envelope
+     *  closes, per TRANSACTIONS.md. */
     fun deleteDraft(draft: DraftTransaction) {
         if (draft.submitted) return
         viewModelScope.launch {
             dao.delete(draft)
             draft.photoPath?.let { File(it).delete() }
+            try {
+                SupabaseClientInstance.client.postgrest["capture_pings"]
+                    .delete {
+                        filter {
+                            eq("buyer_id", CURRENT_BUYER_ID)
+                            eq("client_draft_id", draft.clientSubmissionId)
+                        }
+                    }
+            } catch (e: Exception) {
+                // Non-fatal — capture_pings is disposable/non-authoritative
+                // by design (see TRANSACTIONS.md). A stale ping just means
+                // the live burn-rate estimate is briefly slightly high;
+                // nothing depends on it being exact.
+            }
+        }
+    }
+
+    // Fire-and-forget, deliberately swallows failures — capture_pings is
+    // disposable/non-authoritative (see TRANSACTIONS.md "Live burn-rate
+    // estimate"). The phone reports THIS slip's amount only; the dashboard
+    // does the summing, not the app (confirmed 2026-08-08).
+    private suspend fun pingCapture(envelopeId: String, draft: DraftTransaction) {
+        try {
+            SupabaseClientInstance.client.postgrest["capture_pings"].upsert(
+                CapturePingPayload(
+                    buyerId = CURRENT_BUYER_ID,
+                    envelopeId = envelopeId,
+                    amount = draft.amount,
+                    clientDraftId = draft.clientSubmissionId
+                )
+            ) {
+                onConflict = "buyer_id,client_draft_id"
+            }
+        } catch (e: Exception) {
+            // See comment above — non-fatal by design.
         }
     }
 

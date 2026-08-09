@@ -5,20 +5,31 @@ import androidx.room.PrimaryKey
 import java.util.UUID
 
 /**
- * A local, unsynced expense draft. Everything here lives only on-device
- * until Submit — R2 upload must succeed before the matching server-side
- * `transactions` row is inserted (file-then-record, see TRANSACTIONS.md).
+ * A local, unsynced expense draft. Belongs to exactly one envelope
+ * (petty cash float) — everything stays fully local while that envelope
+ * is `open`. Closing the envelope is the one and only moment anything
+ * uploads or gets written server-side (see TRANSACTIONS.md "Closing an
+ * envelope" — revised 2026-08-08, replaces the earlier per-transaction
+ * Submit design).
  *
  * [clientSubmissionId] is generated once, at draft creation — the same
- * UUID becomes both the R2 object filename and the DB idempotency key.
- * Not a new concept, not two IDs — one UUID, two uses.
+ * UUID becomes both the R2 object filename and the DB idempotency key,
+ * and is what makes envelope Close resumable on retry (see
+ * TRANSACTIONS.md "Retry behavior"). Not a new concept, not two IDs —
+ * one UUID, two uses.
+ *
+ * [envelopeId] the open envelope this draft belongs to. Fetched from
+ * Supabase at launch (see CaptureViewModel) — the app never creates an
+ * envelope itself, only reads which one is currently open for this buyer.
  *
  * [categoryId]/[categoryName] are denormalized from the live Supabase
  * fetch (no local category cache/sync yet — stubbed, see STATE.md).
  *
  * [submitted] is a local-only UI flag. Once true, this draft mirrors an
  * immutable server-side transaction — edit/delete must be disabled in
- * the UI from that point on, per SCHEMA.md's immutability rule.
+ * the UI from that point on. Now set when the ENVELOPE closes
+ * successfully, not per-draft — every draft in a closed envelope flips
+ * together.
  *
  * [supplier] required, matches the physical cover sheet.
  *
@@ -33,16 +44,18 @@ import java.util.UUID
  * stay null when not VATable — never 0 — so "not asked" stays
  * distinguishable from "VAT was zero" (see TRANSACTIONS.md).
  *
- * [slipNumber] generated client-side at capture time, per buyer,
- * sequential — seeded from the buyer's MAX(slip_number) on Supabase at
- * session start so a reinstall/new device doesn't collide with prior
- * submissions (see TRANSACTIONS.md "Slip numbering"). 0 is a placeholder
+ * [slipNumber] generated client-side at capture time, per ENVELOPE (not
+ * per-buyer-lifetime — revised 2026-08-08), sequential — seeded from
+ * max(local Room, server) at session start so neither a reinstall nor an
+ * offline restart collides with prior submissions (see TRANSACTIONS.md
+ * "Slip numbering" / "Zero-local-records case"). 0 is a placeholder
  * only — the ViewModel always assigns a real value before insert.
  */
 @Entity(tableName = "draft_transactions")
 data class DraftTransaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val clientSubmissionId: String = UUID.randomUUID().toString(),
+    val envelopeId: String,
     val categoryId: String?,
     val categoryName: String,
     val photoPath: String?,
