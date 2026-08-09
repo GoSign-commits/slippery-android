@@ -41,4 +41,17 @@ interface DraftTransactionDao {
     // time).
     @Query("SELECT MAX(slipNumber) FROM draft_transactions WHERE envelopeId = :envelopeId")
     suspend fun getMaxSlipNumber(envelopeId: String): Int?
+
+    // Synchronous snapshot for envelope Close — the Flow is for UI, this
+    // is for the batch upload loop where we need a stable list, not a
+    // reactive stream that could shift mid-iteration.
+    @Query("SELECT * FROM draft_transactions WHERE envelopeId = :envelopeId ORDER BY slipNumber ASC")
+    suspend fun getByEnvelopeOnce(envelopeId: String): List<DraftTransaction>
+
+    // Per-draft marking during Close — succeeded drafts flip individually
+    // so a partial failure leaves only the ones that actually made it.
+    // markEnvelopeSubmitted (above) is the final blanket flip, kept as a
+    // belt-and-braces backstop.
+    @Query("UPDATE draft_transactions SET submitted = 1 WHERE id = :id")
+    suspend fun markDraftSubmitted(id: Long)
 }
