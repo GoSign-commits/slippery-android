@@ -7,6 +7,7 @@ import com.production.slippery.Category
 import com.production.slippery.SupabaseClientInstance
 import com.production.slippery.data.AppDatabase
 import com.production.slippery.data.DraftTransaction
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
@@ -56,6 +57,16 @@ private data class CapturePingPayload(
 class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = AppDatabase.getInstance(app).draftTransactionDao()
 
+    // Real signed-in buyer, not a stub — replaces the hardcoded
+    // CURRENT_BUYER_ID constant that existed before QR login was built
+    // (2026-08-09). MainActivity only ever shows CaptureScreen (and
+    // therefore creates this ViewModel) once a session exists, so this
+    // should never actually be null in practice — the exception exists
+    // to surface that invariant breaking loudly, not silently.
+    private val currentBuyerId: String =
+        SupabaseClientInstance.client.auth.currentUserOrNull()?.id
+            ?: error("CaptureViewModel created with no signed-in user")
+
     private val _envelopeState = MutableStateFlow<EnvelopeUiState>(EnvelopeUiState.Loading)
     val envelopeState: StateFlow<EnvelopeUiState> = _envelopeState.asStateFlow()
 
@@ -100,7 +111,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 SupabaseClientInstance.client.postgrest["envelopes"]
                     .select(columns = Columns.list("id", "float_amount")) {
                         filter {
-                            eq("buyer_id", CURRENT_BUYER_ID)
+                            eq("buyer_id", currentBuyerId)
                             eq("status", "open")
                         }
                         limit(1)
@@ -239,7 +250,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 SupabaseClientInstance.client.postgrest["capture_pings"]
                     .delete {
                         filter {
-                            eq("buyer_id", CURRENT_BUYER_ID)
+                            eq("buyer_id", currentBuyerId)
                             eq("client_draft_id", draft.clientSubmissionId)
                         }
                     }
@@ -260,7 +271,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         try {
             SupabaseClientInstance.client.postgrest["capture_pings"].upsert(
                 CapturePingPayload(
-                    buyerId = CURRENT_BUYER_ID,
+                    buyerId = currentBuyerId,
                     envelopeId = envelopeId,
                     amount = draft.amount,
                     clientDraftId = draft.clientSubmissionId
@@ -279,12 +290,5 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         if (!vatApplicable) return null to null
         val vat = amount * 15 / 115
         return vat to (amount - vat)
-    }
-
-    companion object {
-        // STUB — no login/QR onboarding flow exists yet (see STATE.md
-        // outstanding). Real buyer profile row, not fake data, so it
-        // satisfies the buyer_id FK — but must be replaced once auth exists.
-        const val CURRENT_BUYER_ID = "acf9791e-7da7-4844-9e11-9f872698a492"
     }
 }

@@ -80,4 +80,13 @@ dependencies {
     // Receipt capture — matches Handy Andy's proven versions
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // QR login (2026-08-09) — Google Code Scanner: launches a self-contained
+    // Play Services scan activity, same UX pattern as the document scanner
+    // above, no camera permission needed in this app's manifest.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+
+    // Encrypted local storage for workspace config (Keystore-backed, per
+    // infra/PROVISIONING.md's "Buyer invite QR" design)
+    implementation("androidx.security:security-crypto:1.1.0")
 }
