@@ -8,9 +8,20 @@ import com.production.slippery.SupabaseClientInstance
 import com.production.slippery.data.AppDatabase
 import com.production.slippery.data.DraftTransaction
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.android.Android
+import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.put
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +32,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.File
+import java.time.Instant
 
 @Serializable
 private data class SlipNumberRow(@SerialName("slip_number") val slipNumber: Int)
@@ -30,6 +43,18 @@ private data class SlipNumberRow(@SerialName("slip_number") val slipNumber: Int)
 private data class EnvelopeRow(val id: String, @SerialName("float_amount") val floatAmount: Double)
 
 data class EnvelopeInfo(val id: String, val floatAmount: Double)
+
+/**
+ * Close Envelope progress — separate from EnvelopeUiState because Close is
+ * an action with its own lifecycle (uploading → done/failed), not a screen
+ * state. See TRANSACTIONS.md "Closing an envelope".
+ */
+sealed class CloseState {
+    object Idle : CloseState()
+    data class InProgress(val completed: Int, val total: Int) : CloseState()
+    object Success : CloseState()
+    data class Error(val message: String) : CloseState()
+}
 
 /**
  * Three real outcomes on launch, not just loading/loaded — see
@@ -82,6 +107,16 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories.asStateFlow()
+
+    // Presign worker — see TRANSACTIONS.md "Photo backup" / infra docs.
+    // Constant, not configurable: one worker per R2 bucket, same for all buyers.
+    private val presignWorkerUrl =
+        "https://slippery-r2-presign-worker.shauncampbell10.workers.dev"
+
+    private val httpClient = HttpClient(Android)
+
+    private val _closeState = MutableStateFlow<CloseState>(CloseState.Idle)
+    val closeState: StateFlow<CloseState> = _closeState.asStateFlow()
 
     // Next slip number to assign locally, scoped to whichever envelope is
     // currently Ready. Reset/reseeded every time checkEnvelope() runs.
@@ -291,4 +326,194 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         val vat = amount * 15 / 115
         return vat to (amount - vat)
     }
+
+    /**
+     * Close the current envelope: upload every unsubmitted draft's photo to
+     * R2, insert its transaction row, mark it submitted. Only once ALL succeed
+     * does the envelope flip to 'submitted'. Retry-safe via
+     * client_submission_id — see TRANSACTIONS.md "Closing an envelope".
+     */
+    fun closeEnvelope() {
+        val envelope = (envelopeState.value as? EnvelopeUiState.Ready)?.envelope ?: return
+        _closeState.value = CloseState.InProgress(0, 0)
+        viewModelScope.launch {
+            try {
+                val allDrafts = dao.getByEnvelopeOnce(envelope.id)
+                val unsubmitted = allDrafts.filter { !it.submitted }
+                if (unsubmitted.isEmpty()) {
+                    // Nothing to upload — just flip the envelope.
+                    updateEnvelopeToSubmitted(envelope.id)
+                    _closeState.value = CloseState.Success
+                    return@launch
+                }
+                val accessToken = SupabaseClientInstance.client.auth
+                    .currentSessionOrNull()?.accessToken
+                    ?: error("No session for Close — buyer must be signed in")
+
+                for ((index, draft) in unsubmitted.withIndex()) {
+                    _closeState.value =
+                        CloseState.InProgress(index, unsubmitted.size)
+                    uploadAndInsert(draft, envelope.id, accessToken)
+                    // Per-draft: mark submitted locally + delete its ping.
+                    // A partial failure above throws before reaching here,
+                    // so only genuinely-succeeded drafts get marked.
+                    dao.markDraftSubmitted(draft.id)
+                    deleteCapturePing(draft.clientSubmissionId)
+                }
+
+                // Every draft succeeded — flip the envelope itself.
+                _closeState.value =
+                    CloseState.InProgress(unsubmitted.size, unsubmitted.size)
+                updateEnvelopeToSubmitted(envelope.id)
+                _closeState.value = CloseState.Success
+            } catch (e: Exception) {
+                android.util.Log.e("EnvelopeClose", "Close failed", e)
+                _closeState.value = CloseState.Error(
+                    e.message ?: "Close failed. Check your connection and try again."
+                )
+            }
+        }
+    }
+
+    /** Reset Close state back to Idle — called by the UI when dismissing
+     *  the success/error screen. */
+    fun resetCloseState() {
+        _closeState.value = CloseState.Idle
+    }
+
+    // Upload photo to R2 via the presign worker, then insert the transaction
+    // row. Both must succeed before the draft is marked submitted — R2 first
+    // (file-then-record pattern, same as the original per-transaction design).
+    private suspend fun uploadAndInsert(
+        draft: DraftTransaction,
+        envelopeId: String,
+        accessToken: String
+    ) {
+        val receiptPath = "$currentBuyerId/${draft.clientSubmissionId}.jpg"
+        uploadToR2(receiptPath, draft.photoPath, accessToken)
+        insertTransaction(draft, receiptPath, envelopeId)
+    }
+
+    // POST to presign worker for a presigned PUT URL, then PUT the raw JPEG.
+    // Re-uploads on retry are harmless — same filename, overwrites, no orphan.
+    private suspend fun uploadToR2(
+        filePath: String,
+        photoPath: String?,
+        accessToken: String
+    ) {
+        if (photoPath == null) return
+        val presignBody = """{"filePath":"$filePath","contentType":"image/jpeg"}"""
+        val presignResponse = httpClient.post(presignWorkerUrl) {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            contentType(ContentType.Application.Json)
+            setBody(presignBody)
+        }
+        if (presignResponse.status.value !in 200..299) {
+            val body = presignResponse.bodyAsText()
+            android.util.Log.e("EnvelopeClose", "R2 presign failed: ${presignResponse.status}, body: $body")
+            error("R2 presign failed: ${presignResponse.status}")
+        }
+        val presignedUrl = Json.decodeFromString<PresignResponse>(
+            presignResponse.bodyAsText()
+        ).url
+
+        val bytes = File(photoPath).readBytes()
+        val putResponse = httpClient.put(presignedUrl) {
+            contentType(ContentType.Image.JPEG)
+            setBody(bytes)
+        }
+        if (putResponse.status.value !in 200..299) {
+            val body = putResponse.bodyAsText()
+            android.util.Log.e("EnvelopeClose", "R2 upload failed: ${putResponse.status}, body: $body")
+            error("R2 upload failed: ${putResponse.status}")
+        }
+    }
+
+    // Insert the transaction row. On retry, a unique-constraint violation
+    // (Postgres 23505) means the draft was already inserted in a prior attempt
+    // — treat as success, not error. Any other exception propagates and aborts.
+    private suspend fun insertTransaction(
+        draft: DraftTransaction,
+        receiptUrl: String,
+        envelopeId: String
+    ) {
+        val row = TransactionInsertRow(
+            buyerId = currentBuyerId,
+            categoryId = draft.categoryId
+                ?: error("Draft has no category — can't submit"),
+            amount = draft.amount,
+            description = draft.description,
+            receiptUrl = receiptUrl,
+            spentAt = Instant.ofEpochMilli(draft.spentAt).toString(),
+            clientSubmissionId = draft.clientSubmissionId,
+            supplier = draft.supplier,
+            vatApplicable = draft.vatApplicable
+                ?: error("Draft has no VAT answer — can't submit"),
+            vatAmount = draft.vatAmount,
+            amountExclVat = draft.amountExclVat,
+            slipNumber = draft.slipNumber,
+            envelopeId = envelopeId
+        )
+        try {
+            SupabaseClientInstance.client.postgrest["transactions"].insert(row)
+        } catch (e: PostgrestRestException) {
+            // 23505 = unique_violation — already inserted in a prior Close
+            // attempt. This is the idempotency key doing its job, not an error.
+            if (e.code != "23505") throw e
+        }
+    }
+
+    // Flip the envelope to 'submitted' server-side. submitted_at from the
+    // device clock (ISO 8601) — the schema column has its own DEFAULT now()
+    // too, but we set it explicitly so the value is deterministic from the
+    // app's perspective, not dependent on which DB defaults fire.
+    private suspend fun updateEnvelopeToSubmitted(envelopeId: String) {
+        SupabaseClientInstance.client.postgrest["envelopes"]
+            .update({
+                set("status", "submitted")
+                set("submitted_at", Instant.now().toString())
+            }) {
+                filter { eq("id", envelopeId) }
+            }
+    }
+
+    // Non-fatal — capture_pings are disposable by design (see TRANSACTIONS.md
+    // "Live burn-rate estimate"). A stale ping just means the dashboard's
+    // estimate is briefly slightly high; nothing depends on it being exact.
+    private suspend fun deleteCapturePing(clientDraftId: String) {
+        try {
+            SupabaseClientInstance.client.postgrest["capture_pings"]
+                .delete {
+                    filter {
+                        eq("buyer_id", currentBuyerId)
+                        eq("client_draft_id", clientDraftId)
+                    }
+                }
+        } catch (e: Exception) {
+            // See comment above — non-fatal by design.
+        }
+    }
+
+    @Serializable
+    private data class PresignResponse(val url: String)
+
+    // Exact column set per TRANSACTIONS.md — fields NOT set here (id, status,
+    // recon_status, active, submitted_at, created_at, updated_at,
+    // original_transaction_id) all have DB defaults or are irrelevant.
+    @Serializable
+    private data class TransactionInsertRow(
+        @SerialName("buyer_id") val buyerId: String,
+        @SerialName("category_id") val categoryId: String,
+        val amount: Double,
+        val description: String,
+        @SerialName("receipt_url") val receiptUrl: String,
+        @SerialName("spent_at") val spentAt: String,
+        @SerialName("client_submission_id") val clientSubmissionId: String,
+        val supplier: String,
+        @SerialName("vat_applicable") val vatApplicable: Boolean,
+        @SerialName("vat_amount") val vatAmount: Double? = null,
+        @SerialName("amount_excl_vat") val amountExclVat: Double? = null,
+        @SerialName("slip_number") val slipNumber: Int,
+        @SerialName("envelope_id") val envelopeId: String
+    )
 }

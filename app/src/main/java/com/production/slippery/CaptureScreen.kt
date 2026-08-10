@@ -28,6 +28,7 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.production.slippery.data.DraftTransaction
 import com.production.slippery.ui.CaptureViewModel
+import com.production.slippery.ui.CloseState
 import com.production.slippery.ui.EnvelopeUiState
 import com.production.slippery.util.PhotoFiles
 import java.io.File
@@ -48,6 +49,9 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     val drafts by vm.drafts.collectAsState()
     val categories by vm.categories.collectAsState()
     val envelopeState by vm.envelopeState.collectAsState()
+    val closeState by vm.closeState.collectAsState()
+
+    var showCloseConfirm by remember { mutableStateOf(false) }
 
     var receiptMenuFor by remember { mutableStateOf<Long?>(null) }
     var editingDraft by remember { mutableStateOf<DraftTransaction?>(null) }
@@ -184,8 +188,81 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 }
+
+                // Close button — only enabled when there's at least one
+                // unsubmitted draft. Submitted drafts mean a prior partial
+                // Close; the button stays enabled for the remaining ones.
+                val hasUnsubmitted = drafts.any { !it.submitted }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { showCloseConfirm = true },
+                    enabled = hasUnsubmitted &&
+                        closeState !is CloseState.InProgress,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close envelope")
+                }
+
+                // Close progress / result — inline, not a separate dialog,
+                // so the buyer sees the draft list while it uploads.
+                when (val cs = closeState) {
+                    is CloseState.InProgress -> {
+                        Spacer(Modifier.height(8.dp))
+                        val fraction = if (cs.total > 0) cs.completed.toFloat() / cs.total else 0f
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text("Uploading ${cs.completed} of ${cs.total}...")
+                    }
+                    is CloseState.Error -> {
+                        Spacer(Modifier.height(8.dp))
+                        Text(cs.message, color = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.height(4.dp))
+                        Button(onClick = { vm.closeEnvelope() }) {
+                            Text("Retry close")
+                        }
+                    }
+                    is CloseState.Success -> {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Envelope closed. All slips uploaded.",
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Button(onClick = {
+                            vm.resetCloseState()
+                            vm.checkEnvelope()
+                        }) {
+                            Text("Done")
+                        }
+                    }
+                    is CloseState.Idle -> { /* nothing — button is always visible above */ }
+                }
             }
         }
+    }
+
+    if (showCloseConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCloseConfirm = false },
+            title = { Text("Close this envelope?") },
+            text = {
+                Text("Uploads everything and locks it — this can't be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCloseConfirm = false
+                    vm.closeEnvelope()
+                }) { Text("Close") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCloseConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     val toDelete = draftPendingDelete
