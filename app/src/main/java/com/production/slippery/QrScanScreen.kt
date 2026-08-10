@@ -76,11 +76,9 @@ fun QrScanScreen(onLoginSuccess: () -> Unit) {
                         onLoginSuccess()
                     } catch (e: Exception) {
                         isLoading = false
-                        android.util.Log.e("QrScan", "Redemption failed", e)
                         // Deliberately generic in the UI — a wrong/expired/already-used
                         // code shouldn't leak details about why, same
-                        // zero-trust posture as the presign worker. The real
-                        // reason is logged above, not hidden from debugging.
+                        // zero-trust posture as the presign worker.
                         errorMessage = "That code didn't work. Ask accounts for a new one."
                     }
                 }

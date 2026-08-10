@@ -367,7 +367,6 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 updateEnvelopeToSubmitted(envelope.id)
                 _closeState.value = CloseState.Success
             } catch (e: Exception) {
-                android.util.Log.e("EnvelopeClose", "Close failed", e)
                 _closeState.value = CloseState.Error(
                     e.message ?: "Close failed. Check your connection and try again."
                 )
@@ -409,8 +408,6 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             setBody(presignBody)
         }
         if (presignResponse.status.value !in 200..299) {
-            val body = presignResponse.bodyAsText()
-            android.util.Log.e("EnvelopeClose", "R2 presign failed: ${presignResponse.status}, body: $body")
             error("R2 presign failed: ${presignResponse.status}")
         }
         val presignedUrl = Json.decodeFromString<PresignResponse>(
@@ -423,8 +420,6 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             setBody(bytes)
         }
         if (putResponse.status.value !in 200..299) {
-            val body = putResponse.bodyAsText()
-            android.util.Log.e("EnvelopeClose", "R2 upload failed: ${putResponse.status}, body: $body")
             error("R2 upload failed: ${putResponse.status}")
         }
     }
