@@ -208,13 +208,13 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                 when (val cs = closeState) {
                     is CloseState.InProgress -> {
                         Spacer(Modifier.height(8.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                            Text("Uploading ${cs.completed} of ${cs.total}...")
-                        }
+                        val fraction = if (cs.total > 0) cs.completed.toFloat() / cs.total else 0f
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text("Uploading ${cs.completed} of ${cs.total}...")
                     }
                     is CloseState.Error -> {
                         Spacer(Modifier.height(8.dp))
