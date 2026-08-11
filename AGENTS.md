@@ -7,7 +7,7 @@ Cascade: exact find/replace only. One change per prompt. git diff HEAD~1 after e
 Code words:
 DOCS = docs-vs-code audit, any time. Re-derive every status claim from git log/grep/file reads, fix drift.
 PURGE = session-close repo hygiene. Debug/temp logs, scratch files, orphaned code, dupe versions, stale config (flag secrets, don't auto-remove). Propose deletion list, wait for confirm.
-RELOAD = re-read this file + SESSION-PROMPT.md (in slippery-dashboard/docs/), discard conversation assumptions.
+RELOAD = call read_file on this file + SESSION-PROMPT.md (in slippery-dashboard/docs/) NOW, before responding. Discard conversation assumptions, use only what the fresh read returns.
 
 Rule discipline: add a new rule here only after the SAME issue occurs twice.
 Feature commits: STATE.md update in same commit, sourced from checking the code just written.
