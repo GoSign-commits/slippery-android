@@ -239,6 +239,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.insert(draft)
             pingCapture(envelope.id, draft)
+            backupDraft(envelope.id)
         }
     }
 
@@ -271,6 +272,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             // client_draft_id upsert key overwrites the existing ping with
             // the edited amount — see TRANSACTIONS.md "Live burn-rate estimate".
             pingCapture(draft.envelopeId, updated)
+            backupDraft(draft.envelopeId)
         }
     }
 
@@ -487,6 +489,85 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             // See comment above — non-fatal by design.
         }
+    }
+
+    // Fire-and-forget disaster-recovery backup — see TRANSACTIONS.md
+    // "Photo + CSV backup". Runs after every successful local draft
+    // save (insert or edit). Photo backup is a copy of the already-local
+    // photo, separate from the receipt upload that only happens at Close.
+    // CSV is rebuilt from scratch and re-uploaded every time — always a
+    // complete, current snapshot, never partial. Both silently swallow
+    // failures by design: no retry loop, no persisted state — the next
+    // capture is another chance to catch up.
+    private suspend fun backupDraft(envelopeId: String) {
+        val accessToken = SupabaseClientInstance.client.auth
+            .currentSessionOrNull()?.accessToken ?: return
+        try {
+            val allDrafts = dao.getByEnvelopeOnce(envelopeId)
+            val latest = allDrafts.lastOrNull { it.envelopeId == envelopeId }
+            latest?.photoPath?.let { photoPath ->
+                val backupPhotoPath = "$currentBuyerId/backups/${latest.clientSubmissionId}.jpg"
+                uploadToR2(backupPhotoPath, photoPath, accessToken)
+            }
+            uploadBackupCsv(envelopeId, allDrafts, accessToken)
+        } catch (e: Exception) {
+            // Silent by design — see comment above.
+        }
+    }
+
+    // Rebuilds the FULL envelope CSV from every current local draft, in
+    // slip_number order (same order as photo capture), and overwrites the
+    // previous version. Never partial — always regenerated from scratch.
+    private suspend fun uploadBackupCsv(
+        envelopeId: String,
+        drafts: List<com.production.slippery.data.DraftTransaction>,
+        accessToken: String
+    ) {
+        val header = "envelope_id,client_submission_id,slip_number,supplier,description,category,amount,vat_applicable,vat_amount,amount_excl_vat,captured_at"
+        val rows = drafts.joinToString("\n") { d ->
+            listOf(
+                d.envelopeId,
+                d.clientSubmissionId,
+                d.slipNumber.toString(),
+                csvEscape(d.supplier),
+                csvEscape(d.description),
+                csvEscape(d.categoryName),
+                d.amount.toString(),
+                d.vatApplicable?.toString() ?: "",
+                d.vatAmount?.toString() ?: "",
+                d.amountExclVat?.toString() ?: "",
+                Instant.ofEpochMilli(d.createdAt).toString()
+            ).joinToString(",")
+        }
+        val csvContent = "$header\n$rows"
+        val filePath = "$currentBuyerId/backups/$envelopeId.csv"
+
+        val presignBody = """{"filePath":"$filePath","contentType":"text/csv"}"""
+        val presignResponse = httpClient.post(presignWorkerUrl) {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            contentType(ContentType.Application.Json)
+            setBody(presignBody)
+        }
+        if (presignResponse.status.value !in 200..299) {
+            error("R2 CSV presign failed: ${presignResponse.status}")
+        }
+        val presignedUrl = Json.decodeFromString<PresignResponse>(
+            presignResponse.bodyAsText()
+        ).url
+
+        val putResponse = httpClient.put(presignedUrl) {
+            contentType(ContentType.Text.CSV)
+            setBody(csvContent.toByteArray())
+        }
+        if (putResponse.status.value !in 200..299) {
+            error("R2 CSV upload failed: ${putResponse.status}")
+        }
+    }
+
+    private fun csvEscape(value: String): String {
+        return if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            "\"" + value.replace("\"", "\"\"") + "\""
+        } else value
     }
 
     @Serializable
