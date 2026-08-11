@@ -17,6 +17,7 @@
 - **RELOAD** — forces a fresh re-read of this file + SESSION-PROMPT.md (in slippery-dashboard/docs/), discarding any assumption carried from earlier in the conversation. Different job from DOCS (checks docs-vs-code truth) and PURGE (repo cleanup) — this one is purely "stop trusting what you think you know, go read the files again."
 - Rule-adding discipline: only add a new standing rule here after the SAME issue occurs twice — first time may be a fluke, don't bloat this file on one-off lessons.
 - Every feature commit must include its STATE.md update in the SAME commit, sourced from re-checking the code just written — not batched for later.
+- This file is the source of truth. Claude's cross-session memory (/areas/slippery.md) holds a pointer to it, not a duplicate copy — read this file directly rather than trusting a memory summary of it.
 
 ## Output mode (Claude)
 - **Default output is a Cascade prompt, not direct Desktop Commander edits.** Only use DC directly when the user explicitly says to.
