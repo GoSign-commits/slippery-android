@@ -14,6 +14,8 @@
 ## Code words (Claude)
 - **DOCS** — run any time. Full docs audit: re-derive every status claim in STATE.md/FEATURES.md from git log/grep/file reads, fix any drift found. Never assert doc status from conversation memory or prior doc wording.
 - **PURGE** — session-close habit, not mid-build. Repo hygiene pass: leftover debug/temp logging, scratch files, unused/orphaned code, duplicate versions, stale config (flag committed secrets, don't auto-remove). Always proposes a deletion list first — wait for confirmation before deleting anything.
+- **RELOAD** — forces a fresh re-read of this file + SESSION-PROMPT.md (in slippery-dashboard/docs/), discarding any assumption carried from earlier in the conversation. Different job from DOCS (checks docs-vs-code truth) and PURGE (repo cleanup) — this one is purely "stop trusting what you think you know, go read the files again."
+- Rule-adding discipline: only add a new standing rule here after the SAME issue occurs twice — first time may be a fluke, don't bloat this file on one-off lessons.
 - Every feature commit must include its STATE.md update in the SAME commit, sourced from re-checking the code just written — not batched for later.
 
 ## Output mode (Claude)
