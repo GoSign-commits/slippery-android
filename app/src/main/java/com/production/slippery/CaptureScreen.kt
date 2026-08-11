@@ -120,11 +120,15 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
             }
             is EnvelopeUiState.NoOpenEnvelope -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "No active float assigned — check with accounts.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "No active float assigned — check with accounts.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { vm.checkEnvelope() }) { Text("Retry") }
+                    }
                 }
             }
             is EnvelopeUiState.Verifying -> {

@@ -460,15 +460,14 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Flip the envelope to 'submitted' server-side. submitted_at from the
-    // device clock (ISO 8601) — the schema column has its own DEFAULT now()
-    // too, but we set it explicitly so the value is deterministic from the
-    // app's perspective, not dependent on which DB defaults fire.
+    // Flip the envelope to 'submitted' server-side. submitted_at is set by
+    // a Postgres trigger (migration 11) the moment status transitions to
+    // 'submitted' — not sent from the client. See TRANSACTIONS.md
+    // "Envelope lifecycle".
     private suspend fun updateEnvelopeToSubmitted(envelopeId: String) {
         SupabaseClientInstance.client.postgrest["envelopes"]
             .update({
                 set("status", "submitted")
-                set("submitted_at", Instant.now().toString())
             }) {
                 filter { eq("id", envelopeId) }
             }
