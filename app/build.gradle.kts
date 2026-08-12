@@ -1,3 +1,7 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -17,6 +21,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val buildStamp = SimpleDateFormat("MMM d, HH:mm", Locale.US)
+            .format(Date())
+        buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")
     }
 
     buildTypes {

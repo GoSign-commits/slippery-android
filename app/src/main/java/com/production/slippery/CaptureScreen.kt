@@ -247,10 +247,9 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
             }
         }
         Text(
-            "v${BuildConfig.VERSION_NAME} · debug",
-            style = MaterialTheme.typography.labelSmall,
+            BuildConfig.BUILD_STAMP,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.alpha(0.5f)
         )
     }
 
