@@ -239,7 +239,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.insert(draft)
             pingCapture(envelope.id, draft)
-            backupDraft(envelope.id)
+            backupDraft(draft)
         }
     }
 
@@ -272,7 +272,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             // client_draft_id upsert key overwrites the existing ping with
             // the edited amount — see TRANSACTIONS.md "Live burn-rate estimate".
             pingCapture(draft.envelopeId, updated)
-            backupDraft(draft.envelopeId)
+            backupDraft(updated)
         }
     }
 
@@ -498,17 +498,21 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     // complete, current snapshot, never partial. Both silently swallow
     // failures by design: no retry loop, no persisted state — the next
     // capture is another chance to catch up.
-    private suspend fun backupDraft(envelopeId: String) {
+    private suspend fun backupDraft(draft: DraftTransaction) {
         val accessToken = SupabaseClientInstance.client.auth
             .currentSessionOrNull()?.accessToken ?: return
         try {
-            val allDrafts = dao.getByEnvelopeOnce(envelopeId)
-            val latest = allDrafts.lastOrNull { it.envelopeId == envelopeId }
-            latest?.photoPath?.let { photoPath ->
-                val backupPhotoPath = "$currentBuyerId/backups/${latest.clientSubmissionId}.jpg"
+            // Back up THIS draft's own photo, by its own ID — not whichever
+            // draft happens to have the highest slip number. Fixed 2026-08-11:
+            // the previous version guessed "latest by slip_number", which
+            // silently backed up the wrong photo whenever an OLDER slip was
+            // edited (only correct by coincidence for brand-new captures).
+            draft.photoPath?.let { photoPath ->
+                val backupPhotoPath = "$currentBuyerId/backups/${draft.clientSubmissionId}.jpg"
                 uploadToR2(backupPhotoPath, photoPath, accessToken)
             }
-            uploadBackupCsv(envelopeId, allDrafts, accessToken)
+            val allDrafts = dao.getByEnvelopeOnce(draft.envelopeId)
+            uploadBackupCsv(draft.envelopeId, allDrafts, accessToken)
         } catch (e: Exception) {
             // Silent by design — see comment above.
         }
