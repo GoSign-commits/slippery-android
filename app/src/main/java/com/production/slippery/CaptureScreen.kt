@@ -246,6 +246,12 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+        Text(
+            "v${BuildConfig.VERSION_NAME} · debug",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.alpha(0.5f)
+        )
     }
 
     if (showCloseConfirm) {
