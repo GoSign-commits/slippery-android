@@ -134,6 +134,20 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 // can't pick a category until connectivity/next launch. Not fatal.
             }
         }
+        viewModelScope.launch {
+            try {
+                // Defensive backstop for confirm_onboarding() — QrScanScreen calls
+                // this once on first redemption, but that only ever runs one time
+                // per MainActivity's routing. Calling it again here on every launch
+                // is a safe no-op after the first real success (see migration 14),
+                // and closes the gap where a transient network failure during the
+                // one-shot QrScanScreen call would otherwise leave onboarded_at
+                // permanently unset.
+                SupabaseClientInstance.client.postgrest.rpc("confirm_onboarding")
+            } catch (e: Exception) {
+                // Swallow — retried again next launch.
+            }
+        }
         checkEnvelope()
     }
 
