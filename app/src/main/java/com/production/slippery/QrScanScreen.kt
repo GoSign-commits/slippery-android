@@ -12,6 +12,7 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.production.slippery.data.WorkspaceStore
 import io.github.jan.supabase.auth.OtpType
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -71,6 +72,18 @@ fun QrScanScreen(onLoginSuccess: () -> Unit) {
                             email = payload.email,
                             token = payload.emailOtp
                         )
+
+                        // Mark onboarding complete (idempotent, safe no-op after
+                        // first success — see confirm_onboarding() RPC, migration
+                        // 14). Fire-and-forget: a failure here must never block a
+                        // successful login, same pattern as photo/CSV backup.
+                        try {
+                            SupabaseClientInstance.client.postgrest.rpc("confirm_onboarding")
+                        } catch (e: Exception) {
+                            // Non-fatal. CaptureViewModel retries this defensively
+                            // on every launch, so a transient failure here is not
+                            // permanent.
+                        }
 
                         isLoading = false
                         onLoginSuccess()

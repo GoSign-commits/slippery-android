@@ -1,4 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": ["AGENTS.md", "OPENCODE-RULES.md"]
+  "instructions": ["AGENTS.md", "OPENCODE-RULES.md"],
+  "permission": {
+    "edit": "ask",
+    "bash": "ask",
+    "question": "ask",
+    "plan_enter": "ask",
+    "plan_exit": "ask"
+  }
 }
