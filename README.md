@@ -15,7 +15,7 @@ at the start of every session, same as the dashboard repo.
 | `docs/android/REFERENCE.md` | Laws, known traps, file structure |
 | `docs/android/OPERATIONS.md` | Build/git procedures |
 | `docs/shared/SCHEMA.md` | DB rules (schema owned by dashboard repo) |
-| `docs/shared/TRANSACTIONS.md` | Transaction/approval domain design |
+| `docs/shared/RULES.md` | Transaction/approval domain design |
 
 ## Stack
 - Native Android (Kotlin), Room for local-first offline storage

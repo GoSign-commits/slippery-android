@@ -7,7 +7,7 @@
 
 ## Never touch these files, ever, unless the user's prompt explicitly names the exact filename
 
-- Any STATE.md, SESSION-LOG.md, FEATURES.md, SCHEMA.md, TRANSACTIONS.md,
+- Any STATE.md, SESSION-LOG.md, FEATURES.md, SCHEMA.md, RULES.md,
   SESSION-PROMPT.md, or AGENTS.md, in this repo or in the linked
   slippery-dashboard repo
 - Any file under docs/

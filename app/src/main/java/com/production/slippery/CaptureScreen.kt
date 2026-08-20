@@ -65,7 +65,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     var noteInput by remember { mutableStateOf("") }
     var supplierInput by remember { mutableStateOf("") }
     // null = buyer hasn't answered yet — no default is allowed to
-    // masquerade as "No", per TRANSACTIONS.md's VAT design.
+    // masquerade as "No", per RULES.md's VAT design.
     var vatApplicable by remember { mutableStateOf<Boolean?>(null) }
 
     val scannerOptions = remember {
@@ -110,7 +110,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
         Spacer(Modifier.height(12.dp))
 
         // Three real outcomes here, not just loading/loaded — see
-        // TRANSACTIONS.md "Envelope lifecycle" and "Zero-local-records case".
+        // RULES.md "Envelope lifecycle" and "Zero-local-records case".
         // Capture is only ever shown in the Ready branch.
         when (val state = envelopeState) {
             is EnvelopeUiState.Loading -> {

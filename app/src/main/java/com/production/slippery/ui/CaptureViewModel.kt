@@ -47,7 +47,7 @@ data class EnvelopeInfo(val id: String, val floatAmount: Double)
 /**
  * Close Envelope progress — separate from EnvelopeUiState because Close is
  * an action with its own lifecycle (uploading → done/failed), not a screen
- * state. See TRANSACTIONS.md "Closing an envelope".
+ * state. See RULES.md "Closing an envelope".
  */
 sealed class CloseState {
     object Idle : CloseState()
@@ -58,14 +58,14 @@ sealed class CloseState {
 
 /**
  * Three real outcomes on launch, not just loading/loaded — see
- * TRANSACTIONS.md "Envelope lifecycle" and "Zero-local-records case".
+ * RULES.md "Envelope lifecycle" and "Zero-local-records case".
  */
 sealed class EnvelopeUiState {
     object Loading : EnvelopeUiState()
     /** No open envelope for this buyer — a real, valid state, not an error. */
     object NoOpenEnvelope : EnvelopeUiState()
     /** Zero local records for this envelope — must confirm with the server
-     *  before it's safe to allocate a slip number (see TRANSACTIONS.md). */
+     *  before it's safe to allocate a slip number (see RULES.md). */
     data class Verifying(val envelope: EnvelopeInfo) : EnvelopeUiState()
     data class Ready(val envelope: EnvelopeInfo) : EnvelopeUiState()
     data class Error(val message: String) : EnvelopeUiState()
@@ -108,7 +108,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories.asStateFlow()
 
-    // Presign worker — see TRANSACTIONS.md "Photo backup" / infra docs.
+    // Presign worker — see RULES.md "Photo backup" / infra docs.
     // Constant, not configurable: one worker per R2 bucket, same for all buyers.
     private val presignWorkerUrl =
         "https://slippery-r2-presign-worker.shauncampbell10.workers.dev"
@@ -185,7 +185,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // Local-first, but zero local records for THIS envelope genuinely can't
-    // be trusted alone — see TRANSACTIONS.md "Zero-local-records case".
+    // be trusted alone — see RULES.md "Zero-local-records case".
     private suspend fun seedSlipCounter(envelope: EnvelopeInfo) {
         val localMax = try {
             dao.getMaxSlipNumber(envelope.id)
@@ -258,7 +258,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** No-op if [draft] is already submitted — immutable once the envelope
-     *  closes, per TRANSACTIONS.md. */
+     *  closes, per RULES.md. */
     fun updateDraft(
         draft: DraftTransaction,
         amount: Double,
@@ -284,14 +284,14 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.update(updated)
             // client_draft_id upsert key overwrites the existing ping with
-            // the edited amount — see TRANSACTIONS.md "Live burn-rate estimate".
+            // the edited amount — see RULES.md "Live burn-rate estimate".
             pingCapture(draft.envelopeId, updated)
             backupDraft(updated)
         }
     }
 
     /** No-op if [draft] is already submitted — immutable once the envelope
-     *  closes, per TRANSACTIONS.md. */
+     *  closes, per RULES.md. */
     fun deleteDraft(draft: DraftTransaction) {
         if (draft.submitted) return
         viewModelScope.launch {
@@ -307,7 +307,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                     }
             } catch (e: Exception) {
                 // Non-fatal — capture_pings is disposable/non-authoritative
-                // by design (see TRANSACTIONS.md). A stale ping just means
+                // by design (see RULES.md). A stale ping just means
                 // the live burn-rate estimate is briefly slightly high;
                 // nothing depends on it being exact.
             }
@@ -315,7 +315,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // Fire-and-forget, deliberately swallows failures — capture_pings is
-    // disposable/non-authoritative (see TRANSACTIONS.md "Live burn-rate
+    // disposable/non-authoritative (see RULES.md "Live burn-rate
     // estimate"). The phone reports THIS slip's amount only; the dashboard
     // does the summing, not the app (confirmed 2026-08-08).
     private suspend fun pingCapture(envelopeId: String, draft: DraftTransaction) {
@@ -336,7 +336,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // amount is always VAT-inclusive (what the slip shows) — see
-    // TRANSACTIONS.md "Cover-sheet fields". Null, never 0, when not VATable.
+    // RULES.md "Cover-sheet fields". Null, never 0, when not VATable.
     private fun calcVat(amount: Double, vatApplicable: Boolean): Pair<Double?, Double?> {
         if (!vatApplicable) return null to null
         val vat = amount * 15 / 115
@@ -347,7 +347,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
      * Close the current envelope: upload every unsubmitted draft's photo to
      * R2, insert its transaction row, mark it submitted. Only once ALL succeed
      * does the envelope flip to 'submitted'. Retry-safe via
-     * client_submission_id — see TRANSACTIONS.md "Closing an envelope".
+     * client_submission_id — see RULES.md "Closing an envelope".
      */
     fun closeEnvelope() {
         val envelope = (envelopeState.value as? EnvelopeUiState.Ready)?.envelope ?: return
@@ -476,7 +476,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     // Flip the envelope to 'submitted' server-side. submitted_at is set by
     // a Postgres trigger (migration 11) the moment status transitions to
-    // 'submitted' — not sent from the client. See TRANSACTIONS.md
+    // 'submitted' — not sent from the client. See RULES.md
     // "Envelope lifecycle".
     private suspend fun updateEnvelopeToSubmitted(envelopeId: String) {
         SupabaseClientInstance.client.postgrest["envelopes"]
@@ -487,7 +487,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             }
     }
 
-    // Non-fatal — capture_pings are disposable by design (see TRANSACTIONS.md
+    // Non-fatal — capture_pings are disposable by design (see RULES.md
     // "Live burn-rate estimate"). A stale ping just means the dashboard's
     // estimate is briefly slightly high; nothing depends on it being exact.
     private suspend fun deleteCapturePing(clientDraftId: String) {
@@ -504,7 +504,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Fire-and-forget disaster-recovery backup — see TRANSACTIONS.md
+    // Fire-and-forget disaster-recovery backup — see RULES.md
     // "Photo + CSV backup". Runs after every successful local draft
     // save (insert or edit). Photo backup is a copy of the already-local
     // photo, separate from the receipt upload that only happens at Close.
@@ -590,7 +590,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     @Serializable
     private data class PresignResponse(val url: String)
 
-    // Exact column set per TRANSACTIONS.md — fields NOT set here (id, status,
+    // Exact column set per RULES.md — fields NOT set here (id, status,
     // recon_status, active, submitted_at, created_at, updated_at,
     // original_transaction_id) all have DB defaults or are irrelevant.
     @Serializable

@@ -27,7 +27,7 @@ interface DraftTransactionDao {
     suspend fun delete(draft: DraftTransaction)
 
     // Envelope Close flips every one of its drafts to submitted together
-    // — not per-draft one at a time, see TRANSACTIONS.md "Envelope
+    // — not per-draft one at a time, see RULES.md "Envelope
     // lifecycle". Individual markSubmitted(id) removed; nothing used it
     // standalone once Close became envelope-wide.
     @Query("UPDATE draft_transactions SET submitted = 1 WHERE envelopeId = :envelopeId")

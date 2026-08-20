@@ -8,14 +8,14 @@ import java.util.UUID
  * A local, unsynced expense draft. Belongs to exactly one envelope
  * (petty cash float) — everything stays fully local while that envelope
  * is `open`. Closing the envelope is the one and only moment anything
- * uploads or gets written server-side (see TRANSACTIONS.md "Closing an
+ * uploads or gets written server-side (see RULES.md "Closing an
  * envelope" — revised 2026-08-08, replaces the earlier per-transaction
  * Submit design).
  *
  * [clientSubmissionId] is generated once, at draft creation — the same
  * UUID becomes both the R2 object filename and the DB idempotency key,
  * and is what makes envelope Close resumable on retry (see
- * TRANSACTIONS.md "Retry behavior"). Not a new concept, not two IDs —
+ * RULES.md "Retry behavior"). Not a new concept, not two IDs —
  * one UUID, two uses.
  *
  * [envelopeId] the open envelope this draft belongs to. Fetched from
@@ -42,12 +42,12 @@ import java.util.UUID
  * amount is always VAT-inclusive (what the slip shows). When VATable,
  * vatAmount = amount * 15/115, amountExclVat = amount - vatAmount. Both
  * stay null when not VATable — never 0 — so "not asked" stays
- * distinguishable from "VAT was zero" (see TRANSACTIONS.md).
+ * distinguishable from "VAT was zero" (see RULES.md).
  *
  * [slipNumber] generated client-side at capture time, per ENVELOPE (not
  * per-buyer-lifetime — revised 2026-08-08), sequential — seeded from
  * max(local Room, server) at session start so neither a reinstall nor an
- * offline restart collides with prior submissions (see TRANSACTIONS.md
+ * offline restart collides with prior submissions (see RULES.md
  * "Slip numbering" / "Zero-local-records case"). 0 is a placeholder
  * only — the ViewModel always assigns a real value before insert.
  */
