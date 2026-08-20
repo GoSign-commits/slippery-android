@@ -1,6 +1,7 @@
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -10,6 +11,25 @@ plugins {
 }
 
 android {
+    val keystoreFile = rootProject.file("keystore.properties")
+    val hasKeystore = keystoreFile.exists()
+    val keystoreProperties = Properties().apply {
+        if (hasKeystore) {
+            keystoreFile.inputStream().use { load(it) }
+        }
+    }
+
+    if (hasKeystore) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     namespace = "com.production.slippery"
     compileSdk = 36
 
@@ -29,6 +49,9 @@ android {
 
     buildTypes {
         release {
+            if (hasKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
         }
     }
