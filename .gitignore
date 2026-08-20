@@ -12,6 +12,7 @@
 *.jks
 *.keystore
 keystore/
+keystore.properties
 
 # IDEs
 .vscode/
