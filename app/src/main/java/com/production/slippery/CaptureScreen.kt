@@ -363,7 +363,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         onExpandedChange = { categoryMenuExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = selectedCategory?.let { "${it.code} - ${it.name}" } ?: "",
+                            value = selectedCategory?.name ?: "",
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Category *") },
@@ -375,7 +375,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         ) {
                             categories.forEach { cat ->
                                 DropdownMenuItem(
-                                    text = { Text("${cat.code} - ${cat.name}") },
+                                    text = { Text(cat.name) },
                                     onClick = {
                                         selectedCategory = cat
                                         categoryMenuExpanded = false
