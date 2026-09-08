@@ -5,19 +5,28 @@ import android.app.Application
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -488,36 +497,66 @@ private fun DraftRow(
     // sync), never optimistically — see FEATURES.md.
     val rowAlpha = if (draft.submitted) 0.5f else 1f
 
+    val photoPath = draft.photoPath
+    var viewingPhoto by remember { mutableStateOf(false) }
+
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).alpha(rowAlpha),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Slip number only — no "Slip #" label, no thumbnail. Thumbnail's
-        // still viewable in the edit dialog, just not worth the row space.
-        Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.Center) {
-            Text("${draft.slipNumber}", style = MaterialTheme.typography.bodyMedium)
+        // Downsampled thumbnail, decoded by Coil off the main thread and
+        // memory-cached keyed by file path, so scrolling this list never
+        // decodes full-size bitmaps. Tap opens the full-res photo.
+        if (photoPath != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(File(photoPath))
+                    .size(80)
+                    .build(),
+                contentDescription = "Slip photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { viewingPhoto = true }
+            )
+            Spacer(Modifier.width(12.dp))
         }
 
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                draft.description.ifBlank { draft.categoryName },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            draft.categoryId?.let {
-                Text(draft.categoryName, style = MaterialTheme.typography.bodySmall)
+        // Slip number + details. Tapping anywhere here = Edit, the same
+        // action as the kebab menu's Edit item. The menu (and hence Edit)
+        // is hidden once submitted, so the row tap is disabled too.
+        Row(
+            Modifier
+                .weight(1f)
+                .clickable(enabled = !draft.submitted) { onEdit() },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.Center) {
+                Text("${draft.slipNumber}", style = MaterialTheme.typography.bodyMedium)
             }
-            Text(
-                "R${"%.2f".format(draft.amount)}",
-                style = MaterialTheme.typography.titleMedium
-            )
-            if (draft.submitted) {
+
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
-                    "Submitted",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
+                    draft.description.ifBlank { draft.categoryName },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                draft.categoryId?.let {
+                    Text(draft.categoryName, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    "R${"%.2f".format(draft.amount)}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                if (draft.submitted) {
+                    Text(
+                        "Submitted",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
         if (!draft.submitted) {
@@ -533,4 +572,33 @@ private fun DraftRow(
         }
     }
     HorizontalDivider()
+
+    if (viewingPhoto && photoPath != null) {
+        Dialog(
+            onDismissRequest = { viewingPhoto = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(File(photoPath))
+                        .build(),
+                    contentDescription = "Slip photo",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+                IconButton(
+                    onClick = { viewingPhoto = false },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close")
+                }
+            }
+        }
+    }
 }
