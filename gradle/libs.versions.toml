@@ -29,6 +29,10 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "roomVersion" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "roomVersion" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "roomVersion" }
+camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version = "1.4.1" }
+camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version = "1.4.1" }
+camerax-view = { group = "androidx.camera", name = "camera-view", version = "1.4.1" }
+camerax-extensions = { group = "androidx.camera", name = "camera-extensions", version = "1.4.1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

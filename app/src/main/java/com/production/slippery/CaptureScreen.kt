@@ -64,6 +64,9 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     var categoryMenuExpanded by remember { mutableStateOf(false) }
     var noteInput by remember { mutableStateOf("") }
     var supplierInput by remember { mutableStateOf("") }
+    var isLongReceiptMode by remember { mutableStateOf(false) }
+    var showLongReceiptCapture by remember { mutableStateOf(false) }
+    var pendingStitchedBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     // null = buyer hasn't answered yet — no default is allowed to
     // masquerade as "No", per RULES.md's VAT design.
     var vatApplicable by remember { mutableStateOf<Boolean?>(null) }
@@ -153,14 +156,29 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                     }
                 }
             }
-            is EnvelopeUiState.Ready -> {
+             is EnvelopeUiState.Ready -> {
                 Button(onClick = {
-                    scannerClient.getStartScanIntent(activity)
-                        .addOnSuccessListener { intentSender ->
-                            scanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
-                        }
+                    if (isLongReceiptMode) {
+                        showLongReceiptCapture = true
+                    } else {
+                        scannerClient.getStartScanIntent(activity)
+                            .addOnSuccessListener { intentSender ->
+                                scanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+                            }
+                    }
                 }) {
-                    Text("Scan slip")
+                    Text(if (isLongReceiptMode) "Scan long receipt" else "Scan slip")
+                }
+
+                if (pendingStitchedBitmap != null) {
+                    Text("Stitched bitmap ready!")
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Long receipt mode")
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = isLongReceiptMode, onCheckedChange = { isLongReceiptMode = it })
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -274,6 +292,17 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
         )
     }
 
+    if (showLongReceiptCapture) {
+        LongReceiptCaptureScreen(
+            onCaptured = { bitmap ->
+                pendingStitchedBitmap = bitmap
+                showLongReceiptCapture = false
+                // TODO: Wire into dialog logic (showAmountDialog)
+            },
+            onCancel = { showLongReceiptCapture = false }
+        )
+    }
+
     val toDelete = draftPendingDelete
     if (toDelete != null) {
         AlertDialog(
@@ -363,7 +392,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         onExpandedChange = { categoryMenuExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = selectedCategory?.let { "${it.code} - ${it.name}" } ?: "",
+                            value = selectedCategory?.name ?: "",
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Category *") },
@@ -375,7 +404,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         ) {
                             categories.forEach { cat ->
                                 DropdownMenuItem(
-                                    text = { Text("${cat.code} - ${cat.name}") },
+                                    text = { Text(cat.name) },
                                     onClick = {
                                         selectedCategory = cat
                                         categoryMenuExpanded = false

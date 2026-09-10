@@ -111,6 +111,10 @@ dependencies {
 
     // Receipt capture — matches Handy Andy's proven versions
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.camerax.extensions)
     implementation("io.coil-kt:coil-compose:2.6.0")
 
     // QR login (2026-08-09) — Google Code Scanner: launches a self-contained
