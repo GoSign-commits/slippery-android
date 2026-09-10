@@ -468,9 +468,15 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         try {
             SupabaseClientInstance.client.postgrest["transactions"].insert(row)
         } catch (e: PostgrestRestException) {
-            // 23505 = unique_violation — already inserted in a prior Close
-            // attempt. This is the idempotency key doing its job, not an error.
-            if (e.code != "23505") throw e
+            // 23505 = unique_violation, but that code alone doesn't say WHICH
+            // constraint — could be client_submission_id (a genuine already-
+            // inserted retry, safe to skip) or a completely different
+            // constraint (e.g. envelope_id+slip_number), which must NOT be
+            // swallowed. Only treat this as the idempotent-retry case if the
+            // message actually names client_submission_id.
+            val isIdempotentRetry = e.code == "23505" &&
+                e.message?.contains("client_submission_id") == true
+            if (!isIdempotentRetry) throw e
         }
     }
 
