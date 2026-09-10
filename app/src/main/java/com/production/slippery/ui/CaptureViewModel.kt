@@ -472,10 +472,21 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             // constraint — could be client_submission_id (a genuine already-
             // inserted retry, safe to skip) or a completely different
             // constraint (e.g. envelope_id+slip_number), which must NOT be
-            // swallowed. Only treat this as the idempotent-retry case if the
-            // message actually names client_submission_id.
+            // swallowed.
+            //
+            // CONFIRMED BUG (2026-09-10, via real device repro + server
+            // logs): e.message also contains the request URL, which always
+            // lists every inserted column — including "client_submission_id"
+            // — on every insert attempt regardless of which constraint
+            // failed. A bare .contains("client_submission_id") check was
+            // therefore true for ANY 23505 on this table, not just genuine
+            // idempotent retries, and silently swallowed real failures (e.g.
+            // an envelope_id+slip_number collision). Fixed by matching the
+            // quoted constraint name Postgres actually names in its raw
+            // error text, which only appears there — never in the URL/
+            // headers boilerplate that pads out the rest of e.message.
             val isIdempotentRetry = e.code == "23505" &&
-                e.message?.contains("client_submission_id") == true
+                e.message?.contains("\"transactions_client_submission_id_key\"") == true
             if (!isIdempotentRetry) throw e
         }
     }
